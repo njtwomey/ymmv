@@ -1,0 +1,42 @@
+# Cars to track. A car is defined once here, independently of where it's sold;
+# each source turns it into its own search. `uv run ymmv cars` lists them.
+#
+#   label      display name
+#   make/model as the market names them (AutoTrader's spelling is the reference)
+#   doors      optional; omit to include every door count
+#   body_type  optional, e.g. Hatchback, Estate
+#   trims      optional, ordered: the first pattern (regex) matching the variant text
+#              wins. Groups variants into trim families for comparisons.
+#   sources    optional per-source overrides, e.g. {autotrader: {model: "Golf"}}
+
+mini-hatch-3dr:
+  label: MINI Hatch 3-door
+  make: MINI
+  model: Hatch
+  doors: 3
+  trims: &mini_trims
+    - {name: JCW, pattern: 'John Cooper Works|\bJCW\b|\bChallenge\b'}  # Challenge 210: JCW-based special
+    - {name: Cooper S, pattern: '\bCooper SD?\b'}   # SD (diesel) folds into Cooper S
+    - {name: Cooper, pattern: '\bCooper\b'}
+    - {name: One, pattern: '\bOne\b|\bFirst\b'}
+
+mini-hatch-5dr:
+  label: MINI Hatch 5-door
+  make: MINI
+  model: Hatch
+  doors: 5
+  trims: *mini_trims
+
+vw-golf:
+  label: Volkswagen Golf hatchback
+  make: Volkswagen
+  model: Golf
+  body_type: Hatchback
+  trims:
+    - {name: R-Line, pattern: '\bR[- ]Line\b'}
+    - {name: GTI, pattern: '\bGTI\b'}
+    - {name: GTD, pattern: '\bGTD\b'}
+    - {name: GTE, pattern: '\bGTE\b'}
+    - {name: R, pattern: '\bR\b'}
+    - {name: GT, pattern: '\bGT\b'}
+    - {name: Life / Match / SE, pattern: '\b(Life|Match|SE|S)\b'}

@@ -1,0 +1,53 @@
+[project]
+name = "ymmv"
+version = "0.1.0"
+description = "YMMV (your mileage may vary): track UK used-car prices across sites"
+readme = "README.md"
+authors = [
+    { name = "njtwomey", email = "10669240+njtwomey@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "beautifulsoup4>=4.14.3",
+    "httpx>=0.28.1",
+    "loguru>=0.7.3",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.0",
+    "pyyaml>=6.0.3",
+    "sqlalchemy>=2.1.5",
+]
+
+[project.scripts]
+ymmv = "ymmv.cli:main"
+scrape = "ymmv.cli:scrape_main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+    "types-pyyaml>=6.0.12.20260906",
+]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = ["src/ymmv/migrations/versions"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = ".."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
