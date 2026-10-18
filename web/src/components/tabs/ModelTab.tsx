@@ -1,11 +1,10 @@
-import { ExternalLink, Info, Play, RotateCcw } from 'lucide-react'
+import { Info, Play, RotateCcw } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { ChartCard, Empty } from '@/components/ChartCard'
+import { BestValueTable } from '@/components/BestValueTable'
 import { ColourBySelect } from '@/components/ColourBySelect'
 import { EChart } from '@/components/EChart'
 import { FormulaBuilder } from '@/components/FormulaBuilder'
-import { WriteoffBadge } from '@/components/ListingBadges'
-import { MarkMenu } from '@/components/MarkControl'
 import type { ExplainTarget } from '@/components/ExplainDialog'
 import { ExplainPicker } from '@/components/ExplainPicker'
 import { PriceCarCard } from '@/components/PriceCarCard'
@@ -21,7 +20,7 @@ import { colourFor, useBase } from '@/lib/chart'
 import { DEFAULT_FORMULA } from '@/lib/config'
 import { FORMULA_ALIASES, FORMULA_COLUMNS } from '@/lib/data'
 import { type Dim, levelLabel, RATINGS } from '@/lib/dims'
-import { gbp, miles, num, pct, pValue } from '@/lib/format'
+import { gbp, num, pct, pValue } from '@/lib/format'
 import { FormulaError, parseFormula } from '@/lib/formula'
 import type { ModelResult } from '@/lib/model'
 import { colouredScatter } from '@/lib/series'
@@ -291,10 +290,6 @@ export function ModelTab({
     }
   }, [gaps, b])
 
-  const bestValue = useMemo(
-    () => gaps.filter((g) => g.r.status === 'active').sort((x, y) => x.gap - y.gap).slice(0, 20),
-    [gaps],
-  )
 
   return (
     <div className="grid gap-4">
@@ -363,62 +358,7 @@ export function ModelTab({
             </ChartCard>
           </div>
 
-          <ChartCard title="Best value" description={`For-sale cars furthest below their ${predLabel} prediction. Check write-offs and photos before getting excited.`}>
-            {bestValue.length ? (
-              <div className="max-w-full overflow-x-auto">
-                <Table className="text-sm">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-8" />
-                      <TableHead>Car</TableHead>
-                      <TableHead className="text-right">Mileage</TableHead>
-                      <TableHead className="text-right">Price</TableHead>
-                      <TableHead className="text-right">Model</TableHead>
-                      <TableHead className="text-right">Gap</TableHead>
-                      <TableHead>Where</TableHead>
-                      <TableHead className="w-8" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {bestValue.map(({ r, pred, gap }) => (
-                      <TableRow key={r.id} className="cursor-pointer" onClick={() => onPick(r.id)}>
-                        <TableCell>
-                          <MarkMenu mark={r.mark} onChange={(m) => onMark(r.id, m)} />
-                        </TableCell>
-                        <TableCell className="max-w-[18rem]">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate">
-                              {r.year} {r.variant}
-                            </span>
-                            <WriteoffBadge writeoff={r.writeoff} />
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{miles(r.mileage)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{gbp(r.price_gbp)}</TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">{gbp(pred)}</TableCell>
-                        <TableCell className="text-right font-medium text-emerald-600 tabular-nums dark:text-emerald-400">{pct(gap)}</TableCell>
-                        <TableCell className="max-w-[10rem] truncate text-muted-foreground">
-                          {r.location}
-                          {r.distance_miles !== null && ` · ${r.distance_miles} mi`}
-                        </TableCell>
-                        <TableCell>
-                          {r.url && (
-                            <Button asChild variant="ghost" size="icon-sm" onClick={(e) => e.stopPropagation()}>
-                              <a href={r.url} target="_blank" rel="noreferrer" aria-label="Open advert">
-                                <ExternalLink />
-                              </a>
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            ) : (
-              <Empty>No predictions for for-sale cars.</Empty>
-            )}
-          </ChartCard>
+          <BestValueTable gaps={gaps} predLabel={predLabel} onPick={onPick} onMark={onMark} onExplain={onExplainListing} />
 
           <ChartCard
             title="Coefficients"

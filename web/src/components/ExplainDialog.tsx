@@ -247,7 +247,14 @@ export function ExplainDialog({
         }
       }}
     >
-      <DialogContent className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto sm:max-w-4xl">
+      <DialogContent
+        className="max-h-[92vh] grid-cols-[minmax(0,1fr)] overflow-y-auto sm:max-w-4xl"
+        // Focus the dialog itself, not its first button: focusing the Mark button would pop its tooltip.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          ;(e.currentTarget as HTMLElement).focus()
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Why {result ? gbp(result.prediction) : 'this price'}?</DialogTitle>
           <DialogDescription>

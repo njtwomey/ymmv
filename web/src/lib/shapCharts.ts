@@ -46,7 +46,8 @@ export function waterfallOption(b: Base, d: { base: number; prediction: number; 
       type: 'value' as const,
       min: Math.max(0, Math.floor((lo - pad) / 250) * 250),
       max: Math.ceil((hi + pad) / 250) * 250,
-      axisLabel: { color: b.t.muted, fontSize: 11, formatter: (v: number) => gbpK(v) },
+      // The axis starts and ends at padded, non-round values: hide those edge labels so they can't collide.
+      axisLabel: { color: b.t.muted, fontSize: 11, formatter: (v: number) => gbpK(v), showMinLabel: false, showMaxLabel: false },
       splitLine: { lineStyle: { color: b.t.grid } },
       axisLine: { show: false },
     },
