@@ -121,3 +121,46 @@ describe('buildDesign', () => {
     expect(d.encode({ x: 2, g: 'zzz' })).toBeNull()
   })
 })
+
+describe('O() ordered categories', () => {
+  const cars = [
+    { y: 10, yr: 2016, t: 'One' },
+    { y: 12, yr: 2018, t: 'Cooper' },
+    { y: 13, yr: 2018, t: 'Cooper S' },
+    { y: 15, yr: 2019, t: 'Cooper S' },
+    { y: 16, yr: 2019, t: 'JCW' },
+  ]
+
+  it('codes x ≥ level for each level above the lowest', () => {
+    const d = buildDesign(parseFormula('y ~ O(yr)'), cars)
+    expect(d.columns.map((c) => c.name)).toEqual(['(Intercept)', 'O(yr)[≥2018]', 'O(yr)[≥2019]'])
+    expect(d.X.map((r) => r.slice(1))).toEqual([[0, 0], [1, 0], [1, 0], [1, 1], [1, 1]])
+  })
+
+  it('places values the data never had by their position', () => {
+    const d = buildDesign(parseFormula('y ~ O(yr)'), cars)
+    expect(d.encode({ yr: 2017 })).toEqual([1, 0, 0]) // between 2016 and 2018: as 2016
+    expect(d.encode({ yr: 2024 })).toEqual([1, 1, 1]) // above the range: as 2019
+    expect(d.encode({ yr: 2010 })).toEqual([1, 0, 0])
+  })
+
+  it('orders text by the listed levels, dropping rows outside the list', () => {
+    const d = buildDesign(parseFormula('y ~ O(t, "One", "Cooper", "Cooper S")'), cars)
+    expect(d.columns.map((c) => c.name)).toEqual(['(Intercept)', 'O(t, "One", "Cooper", "Cooper S")[≥Cooper]', 'O(t, "One", "Cooper", "Cooper S")[≥Cooper S]'])
+    expect(d.dropped).toBe(1) // JCW isn't listed
+    expect(d.encode({ t: 'Cooper S' })).toEqual([1, 1, 1])
+    expect(d.encode({ t: 'JCW' })).toBeNull()
+  })
+
+  it('needs an order for text columns', () => {
+    expect(() => buildDesign(parseFormula('y ~ O(t)'), cars)).toThrow(/O\(t, "lowest"/)
+    expect(() => parseFormula('y ~ O(t, 1)')).toThrow(/O\(\)/)
+    expect(() => parseFormula('y ~ O(t, "a", "a")')).toThrow(/twice/)
+  })
+
+  it('works in interactions', () => {
+    const d = buildDesign(parseFormula('y ~ O(yr):x'), cars.map((c, i) => ({ ...c, x: i + 1 })))
+    expect(d.columns.map((c) => c.name)).toEqual(['(Intercept)', 'O(yr)[≥2018]:x', 'O(yr)[≥2019]:x'])
+    expect(d.X[3].slice(1)).toEqual([4, 4])
+  })
+})

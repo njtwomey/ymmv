@@ -6,7 +6,7 @@ export interface OlsFit {
   beta: number[]
   se: number[]
   kept: boolean[]
-  /** columns that were all zero in the fitted data, e.g. a category level never seen */
+  /** columns that were all zero in the fitted data, e.g. a category level never seen (bar `steps`) */
   unseen: boolean[]
   n: number
   /** number of estimated coefficients */
@@ -43,13 +43,18 @@ function independentColumns(cols: number[][], tol = 1e-9): boolean[] {
   })
 }
 
-export function ols(X: number[][], y: number[], hasIntercept: boolean): OlsFit {
+/**
+ * `steps` marks ordered-category columns (x ≥ level): one that is all zero just
+ * means no car reached that level, so a car beyond it is priced at the highest
+ * level seen rather than not at all.
+ */
+export function ols(X: number[][], y: number[], hasIntercept: boolean, steps: boolean[] = []): OlsFit {
   const n = X.length
   const p = X[0]?.length ?? 0
   if (n === 0 || p === 0) throw new Error('Nothing to fit: no rows or no columns')
   const cols = Array.from({ length: p }, (_, j) => X.map((r) => r[j]))
   const kept = independentColumns(cols)
-  const unseen = cols.map((c) => c.every((v) => v === 0))
+  const unseen = cols.map((c, j) => !steps[j] && c.every((v) => v === 0))
   const keptIndex = kept.flatMap((k, j) => (k ? [j] : []))
   const k = keptIndex.length
   if (n <= k) throw new Error(`Too few rows (${n}) for ${k} coefficients`)

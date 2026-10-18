@@ -124,7 +124,8 @@ function FormulaEditor({
             <p>
               <code>a + b</code> terms · <code>a:b</code> interaction · <code>a * b</code> = a + b + a:b · <code>- 1</code> or <code>0 +</code> no
               intercept · <code>log() log1p() sqrt() exp() abs()</code> · <code>I(age^2)</code> arithmetic · <code>C(x)</code> /{' '}
-              <code>C(x, "Level")</code> categorical with a reference level.
+              <code>C(x, "Level")</code> categorical with a reference level · <code>O(x)</code> /{' '}
+              <code>O(x, "low", "high")</code> ordered categories: each coefficient is the step up from the level below.
             </p>
             <p>Text columns are categorical (reference = most common level). Terms that don’t vary after filtering are dropped.</p>
             <p>Columns: {FORMULA_COLUMNS.join(', ')}.</p>

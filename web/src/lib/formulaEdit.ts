@@ -61,6 +61,7 @@ export function numericVariants(x: string): { term: string; label: string }[] {
     { term: `sqrt(${x})`, label: 'square root' },
     { term: `I(${x}^2)`, label: 'squared (add with x for a curve)' },
     { term: `C(${x})`, label: 'as categories, one effect per value' },
+    { term: `O(${x})`, label: 'as ordered steps, one step up per value' },
   ]
 }
 

@@ -32,9 +32,9 @@ const RESPONSES = ['log(price)', 'sqrt(price)', 'price']
 
 /** Numeric slots: pick one way in (or leave out). `column` is what must be present. */
 const SLOTS = [
-  { name: 'age', column: 'age', options: ['', 'age', 'age + I(age^2)', 'C(year)'] },
+  { name: 'age', column: 'age', options: ['', 'age', 'age + I(age^2)', 'C(year)', 'O(year)'] },
   { name: 'mileage', column: 'mileage', options: ['', 'mileage', 'log1p(mileage)', 'sqrt(mileage)', 'mileage + log1p(mileage)'] },
-  { name: 'engine', column: 'engine_l', options: ['', 'engine_l', 'C(engine_l)'] },
+  { name: 'engine', column: 'engine_l', options: ['', 'engine_l', 'C(engine_l)', 'O(engine_l)'] },
   { name: 'distance', column: 'distance_miles', options: ['', 'local', 'log1p(distance_miles)'] },
 ]
 
@@ -61,6 +61,7 @@ const INTERACTIONS = [
   { term: 'fuel:age', needs: ['fuel', 'age'] },
   { term: 'trim:transmission', needs: ['trim', 'transmission'] },
   { term: 'C(engine_l):age', needs: ['engine', 'age'] },
+  { term: 'O(engine_l):age', needs: ['engine', 'age'] },
 ]
 
 /** Never offered, and why. */

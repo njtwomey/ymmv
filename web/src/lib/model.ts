@@ -102,13 +102,17 @@ function standardise(design: Design): { design: Design; scaling: (Scaling | null
   }
 }
 
+/** Columns made only of O() steps (and numbers), which extrapolate to the nearest level. */
+const stepColumns = (design: Design) =>
+  design.columns.map((c) => c.parts.some((p) => p.ordinal) && c.parts.every((p) => p.level === null || p.ordinal))
+
 export function fitModel(rows: Row[], formulaText: string, opts: ModelOptions = {}): ModelResult {
   const formula = parseFormula(formulaText)
   const data = rows as unknown as Record<string, unknown>[]
   const raw = buildDesign(formula, data, { aliases: FORMULA_ALIASES, refs: opts.refs })
   const { design, scaling } = opts.standardise ? standardise(raw) : { design: raw, scaling: raw.columns.map(() => null) }
   if (design.X.length < 10) throw new FormulaError(`Only ${design.X.length} complete rows: too few to fit`)
-  const fit = ols(design.X, design.y, design.intercept)
+  const fit = ols(design.X, design.y, design.intercept, stepColumns(design))
   const response = responseKind(formula)
   const inv = inverseResponse(response.kind)
   const isLog = response.kind === 'log' || response.kind === 'log1p'
@@ -194,6 +198,7 @@ function crossValidate(
         train.map((i) => design.X[i]),
         train.map((i) => design.y[i]),
         design.intercept,
+        stepColumns(design),
       )
     } catch {
       continue
@@ -234,14 +239,14 @@ function crossValidate(
   }
 }
 
-/** Coefficients belonging to one categorical column, e.g. all seller_type[...] dummies. */
+/** Coefficients belonging to one categorical column, e.g. all seller_type[...] dummies (not O() steps). */
 export function effectsOf(model: ModelResult, column: string): Coef[] {
-  return model.coefs.filter((c) => c.parts.length === 1 && c.parts[0].varName === column && c.parts[0].level !== null)
+  return model.coefs.filter((c) => c.parts.length === 1 && c.parts[0].varName === column && c.parts[0].level !== null && !c.parts[0].ordinal)
 }
 
-/** Does the formula already contain `column` as a main effect? */
+/** Does the formula already contain `column` as a main effect, coded against a reference level? */
 export function hasMainEffect(formula: Formula, column: string): boolean {
-  return formula.terms.some((t) => t.factors.length === 1 && t.factors[0].varName === column)
+  return formula.terms.some((t) => t.factors.length === 1 && t.factors[0].varName === column && !t.factors[0].ordinal)
 }
 
 /** A fitted model's scores, in the shape saved to the database. */

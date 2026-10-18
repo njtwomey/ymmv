@@ -11,11 +11,18 @@
  *   log, log1p, sqrt, exp, abs        numeric transforms of a column
  *   I(expr)     arithmetic: + - * / ^ and numbers, e.g. I(age^2), I(mileage / 1000)
  *   C(x), C(x, "ref")   treat x as categorical, optionally choosing its reference level
+ *   O(x), O(x, "a", "b", ...)   treat x as ordered categories (text columns list their order)
  *
  * String/boolean columns are categorical automatically, with treatment (dummy)
  * contrasts. The reference level is the most frequent one unless C(x, "ref")
  * or the `refs` option says otherwise. Levels or columns that don't vary in the
  * data are dropped with a warning instead of failing.
+ *
+ * O() uses cumulative ("thermometer") coding: one column per level above the
+ * lowest, x ≥ level. Fitted values are the same as C(x), but each coefficient is
+ * the step up from the level below, and a value the data never had still gets a
+ * prediction: 2017 between 2016 and 2018 is priced as 2016, beyond the range as
+ * the nearest end.
  */
 
 export class FormulaError extends Error {
@@ -156,8 +163,11 @@ export interface Factor {
   /** canonical text, e.g. "log1p(mileage)", "trim", "C(trim, \"Cooper\")" */
   key: string
   expr: Expr
-  /** forced categorical by C() */
+  /** forced categorical by C() or O() */
   categorical: boolean
+  /** ordered by O(); `order` lists a text column's levels, lowest first */
+  ordinal: boolean
+  order: string[] | null
   /** the single column behind a bare variable or C(x); null for transforms */
   varName: string | null
   ref: string | null
@@ -281,11 +291,16 @@ class Parser {
       if (args.length < 1 || args.length > 2 || args[0].kind !== 'var')
         throw new FormulaError('C() takes a column and an optional reference level: C(trim, "Cooper")', name.pos)
       if (args[1] && args[1].kind !== 'str') throw new FormulaError('C() reference level must be a quoted string', name.pos)
+    } else if (fn === 'O') {
+      if (args.length < 1 || args[0].kind !== 'var' || args.slice(1).some((a) => a.kind !== 'str'))
+        throw new FormulaError('O() takes a column, then for text columns its levels in order: O(trim, "One", "Cooper", "Cooper S")', name.pos)
+      const order = args.slice(1).map((a) => (a as { value: string }).value)
+      if (new Set(order).size !== order.length) throw new FormulaError('O() lists a level twice', name.pos)
     } else if (fn === 'I' || fn in FUNCTIONS) {
       if (args.length !== 1) throw new FormulaError(`${fn}() takes one argument`, name.pos)
     } else {
       throw new FormulaError(
-        `Unknown function '${fn}'. Use one of ${['I', 'C', ...Object.keys(FUNCTIONS)].join(', ')}`,
+        `Unknown function '${fn}'. Use one of ${['I', 'C', 'O', ...Object.keys(FUNCTIONS)].join(', ')}`,
         name.pos,
       )
     }
@@ -362,9 +377,13 @@ function factorOf(e: Expr): Factor {
   if (e.kind === 'call' && e.fn === 'C') {
     const v = (e.args[0] as { name: string }).name
     const ref = e.args[1]?.kind === 'str' ? e.args[1].value : null
-    return { key: printExpr(e), expr: e.args[0], categorical: true, varName: v, ref }
+    return { key: printExpr(e), expr: e.args[0], categorical: true, ordinal: false, order: null, varName: v, ref }
   }
-  return { key: printExpr(e), expr: e, categorical: false, varName: e.kind === 'var' ? e.name : null, ref: null }
+  if (e.kind === 'call' && e.fn === 'O') {
+    const order = e.args.slice(1).map((a) => (a as { value: string }).value)
+    return { key: printExpr(e), expr: e.args[0], categorical: true, ordinal: true, order: order.length ? order : null, varName: (e.args[0] as { name: string }).name, ref: null }
+  }
+  return { key: printExpr(e), expr: e, categorical: false, ordinal: false, order: null, varName: e.kind === 'var' ? e.name : null, ref: null }
 }
 
 export function parseFormula(text: string): Formula {
@@ -423,6 +442,8 @@ export interface ColumnPart {
   factor: string
   varName: string | null
   level: string | null
+  /** an O() column: 1 when the value is at or above `level` */
+  ordinal?: boolean
 }
 
 export interface DesignColumn {
@@ -432,12 +453,14 @@ export interface DesignColumn {
 
 interface Encoding {
   factor: Factor
-  kind: 'numeric' | 'categorical'
-  levels: string[] // categorical: non-reference levels, in column order
+  kind: 'numeric' | 'categorical' | 'ordinal'
+  levels: string[] // categorical: non-reference levels, in column order; ordinal: all but the lowest
   ref: string | null
   allLevels: string[]
   /** numeric columns used as factors keep a fixed number of decimals: 1.5 / 2.0, not 1.5 / 2 */
   decimals: number
+  /** ordinal: a level's position (the number itself, or its index in the O() order); null if it has none */
+  rank?: (level: string) => number | null
 }
 
 export interface Design {
@@ -484,16 +507,25 @@ export function buildDesign(f: Formula, data: Record<string, unknown>[], opts: D
 
   const factors = new Map<string, Factor>()
   for (const t of f.terms) for (const fa of t.factors) factors.set(fa.key, fa)
-  const kinds = new Map<string, 'numeric' | 'categorical'>()
+  const kinds = new Map<string, 'numeric' | 'categorical' | 'ordinal'>()
   for (const fa of factors.values()) {
     const cat = fa.categorical || (fa.varName !== null && isCategoricalColumn(data, resolve(fa.varName)))
-    kinds.set(fa.key, cat ? 'categorical' : 'numeric')
+    kinds.set(fa.key, fa.ordinal ? 'ordinal' : cat ? 'categorical' : 'numeric')
+    if (fa.ordinal && !fa.order && isCategoricalColumn(data, resolve(fa.varName!)))
+      throw new FormulaError(`${fa.varName} is text, so O() needs its levels in order: O(${fa.varName}, "lowest", ..., "highest")`)
+  }
+  // An ordinal level's position: numbers order themselves, text follows the O() list.
+  const rankers = new Map<string, (level: string) => number | null>()
+  for (const fa of factors.values()) {
+    if (!fa.ordinal) continue
+    const order = fa.order
+    rankers.set(fa.key, order ? (l) => (order.includes(l) ? order.indexOf(l) : null) : (l) => (Number.isFinite(Number(l)) ? Number(l) : null))
   }
 
   // Numbers used as categories get a consistent label precision ("1.5", "2.0").
   const decimals = new Map<string, number>()
   for (const fa of factors.values()) {
-    if (kinds.get(fa.key) !== 'categorical') continue
+    if (kinds.get(fa.key) === 'numeric') continue
     let d = 0
     for (const row of data) {
       const v = evalExpr(fa.expr, getter(row))
@@ -517,7 +549,11 @@ export function buildDesign(f: Formula, data: Record<string, unknown>[], opts: D
       if (kinds.get(fa.key) === 'numeric') {
         if (typeof v !== 'number') return
         fv.set(fa.key, v)
-      } else fv.set(fa.key, levelOf(fa.key, v))
+      } else {
+        const l = levelOf(fa.key, v)
+        if (rankers.has(fa.key) && rankers.get(fa.key)!(l) === null) return // not in the O() order
+        fv.set(fa.key, l)
+      }
     }
     values.push({ y, f: fv })
     rowIdx.push(i)
@@ -527,7 +563,12 @@ export function buildDesign(f: Formula, data: Record<string, unknown>[], opts: D
   const encodings = new Map<string, Encoding>()
   const constant = new Set<string>()
   for (const fa of factors.values()) {
-    if (kinds.get(fa.key) === 'categorical') {
+    if (kinds.get(fa.key) === 'ordinal') {
+      const rank = rankers.get(fa.key)!
+      const all = [...new Set(values.map((v) => v.f.get(fa.key) as string))].sort((a, b) => rank(a)! - rank(b)!)
+      if (all.length < 2) constant.add(fa.key)
+      encodings.set(fa.key, { factor: fa, kind: 'ordinal', levels: all.slice(1), ref: all[0] ?? null, allLevels: all, decimals: decimals.get(fa.key) ?? 0, rank })
+    } else if (kinds.get(fa.key) === 'categorical') {
       const counts = new Map<string, number>()
       for (const v of values) {
         const l = v.f.get(fa.key) as string
@@ -563,18 +604,23 @@ export function buildDesign(f: Formula, data: Record<string, unknown>[], opts: D
       const parts: ColumnPart[] =
         enc.kind === 'numeric'
           ? [{ factor: fa.key, varName: fa.varName, level: null }]
-          : enc.levels.map((l) => ({ factor: fa.key, varName: fa.varName, level: l }))
+          : enc.levels.map((l) => ({ factor: fa.key, varName: fa.varName, level: l, ...(enc.kind === 'ordinal' && { ordinal: true }) }))
       combos = combos.flatMap((c) => parts.map((p) => [...c, p]))
     }
     for (const parts of combos)
-      columns.push({ name: parts.map((p) => (p.level === null ? p.factor : `${p.factor}[${p.level}]`)).join(':'), parts })
+      columns.push({ name: parts.map((p) => (p.level === null ? p.factor : `${p.factor}[${p.ordinal ? '≥' : ''}${p.level}]`)).join(':'), parts })
   }
 
+  const indicator = (p: ColumnPart, v: number | string | undefined) => {
+    if (!p.ordinal) return v === p.level ? 1 : 0
+    const rank = rankers.get(p.factor)!
+    return rank(v as string)! >= rank(p.level!)! ? 1 : 0
+  }
   const rowVector = (fv: Map<string, number | string>): number[] =>
     columns.map((c) =>
       c.parts.reduce((acc, p) => {
         const v = fv.get(p.factor)
-        return acc * (p.level === null ? (v as number) : v === p.level ? 1 : 0)
+        return acc * (p.level === null ? (v as number) : indicator(p, v))
       }, 1),
     )
 
@@ -589,7 +635,8 @@ export function buildDesign(f: Formula, data: Record<string, unknown>[], opts: D
         fv.set(enc.factor.key, v)
       } else {
         const l = levelOf(enc.factor.key, v)
-        if (!enc.allLevels.includes(l)) return null
+        // An ordered value only needs a position; an unordered one must be a level the fit saw.
+        if (enc.kind === 'ordinal' ? enc.rank!(l) === null : !enc.allLevels.includes(l)) return null
         fv.set(enc.factor.key, l)
       }
     }

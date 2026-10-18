@@ -3,8 +3,10 @@
  * values back into a row the model can predict.
  *
  * - A variable used as a category anywhere in the formula (a text column, or a
- *   number inside C()) becomes a dropdown of the levels the model has seen.
- * - Other variables are numbers.
+ *   number inside C()) becomes a dropdown of the levels the model has seen;
+ *   a text column inside O() offers its listed order.
+ * - Other variables are numbers, including numbers inside O(), which can price
+ *   values the data never had.
  * - `age` is asked as registration year (age = this year's scrape year − year),
  *   because that's what an advert shows.
  */
@@ -39,9 +41,11 @@ export function priceFields(model: ModelResult, rows: Row[]): PriceField[] {
   const categorical = new Map<string, string[]>()
   const numeric = new Set<string>()
   for (const enc of model.design.encodings.values()) {
-    if (enc.kind === 'categorical' && enc.factor.varName) {
+    // Ordered text levels are a dropdown in their own order; ordered numbers stay a number box.
+    const levels = enc.kind === 'categorical' ? enc.allLevels : enc.kind === 'ordinal' ? enc.factor.order : null
+    if (levels && enc.factor.varName) {
       const name = enc.factor.varName
-      categorical.set(name, [...new Set([...(categorical.get(name) ?? []), ...enc.allLevels])])
+      categorical.set(name, [...new Set([...(categorical.get(name) ?? []), ...levels])])
     } else {
       for (const v of exprVars(enc.factor.expr)) numeric.add(v)
     }

@@ -44,3 +44,25 @@ describe('rank-deficient formulas', () => {
     expect(m.cv).not.toBeNull()
   })
 })
+
+describe('ordered categories', () => {
+  const asC = fitModel(rows, 'log(price) ~ C(age) + mileage', { folds: 5 })
+  const asO = fitModel(rows, 'log(price) ~ O(age) + mileage', { folds: 0 })
+
+  it('fit the same as C() but read as steps between neighbouring levels', () => {
+    for (const [id, p] of asC.fitted) expect(asO.fitted.get(id)).toBeCloseTo(p, 6)
+    const c = (m: typeof asC, name: string) => m.coefs.find((x) => x.name === name)!.estimate
+    // C() is against the most common level, so compare differences.
+    expect(c(asO, 'O(age)[≥6]')).toBeCloseTo(c(asC, 'C(age)[6]') - c(asC, 'C(age)[5]'), 6)
+  })
+
+  it('still predicts in cross-validation when a fold never saw a level', () => {
+    // One car is 20 years old: whichever fold holds it, the rest never saw age 20.
+    const old = [...rows, { ...rows[0], id: 999, age: 20 } as unknown as Row]
+    const c = fitModel(old, 'log(price) ~ C(age) + mileage', { folds: 5 })
+    const o = fitModel(old, 'log(price) ~ O(age) + mileage', { folds: 5 })
+    expect(c.oof.has(999)).toBe(false)
+    expect(o.oof.has(999)).toBe(true)
+    expect(o.cv!.n).toBe(old.length)
+  })
+})
