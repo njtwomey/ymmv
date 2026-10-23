@@ -1,5 +1,5 @@
 /**
- * "Optimise": a timed, randomised search for the formula with the lowest
+ * "Optimise": a timed local search for the formula with the lowest
  * cross-validated RMSE, with a live timer and RMSE-over-time chart.
  * The search itself runs in a Web Worker (lib/search.worker.ts).
  */
@@ -166,7 +166,8 @@ export function ModelSearchDialog({ rows, current, onUse }: { rows: Row[]; curre
         <DialogHeader>
           <DialogTitle>Optimise the model</DialogTitle>
           <DialogDescription>
-            Tries random formulas (and tweaks of the best one so far) on the filtered cars, scoring each by cross-validated RMSE in £.
+            Starts from your formula and keeps making single changes (a transform, a feature, an interaction) that lower the
+            cross-validated RMSE in £ on the filtered cars; when no single change helps, it shakes up the best so far and climbs again.
             A random {Math.round(DEFAULT_SEARCH.testFrac * 100)}% of cars is held out and only used to score the winner at the end.
           </DialogDescription>
         </DialogHeader>

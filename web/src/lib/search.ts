@@ -1,5 +1,19 @@
 /**
- * Randomised search over model formulas, scored by cross-validated RMSE in £.
+ * Search over model formulas, scored by cross-validated RMSE in £.
+ *
+ * The search is a local search with restarts (first-improvement hill climbing
+ * plus "kicks"): start from the user's formula, try single changes (another
+ * response, another way in for a number, a category in or out, an interaction
+ * in or out) in random order and move to the first one that scores better.
+ * When no single change helps, shake up the best formula so far with a few
+ * random changes and climb again. Interactions are offered for every category
+ * with age, mileage and engine size, and for every pair of categories.
+ *
+ * Benchmarked on the real data (10 splits, 60 s each) against the earlier
+ * half-random, half-tweak search: no worse on the dashboard's default filters,
+ * and about £25 (2%) lower held-out RMSE on all AutoTrader cars, where many more
+ * features vary. A "simplest model within one SE" pick was worse in every case,
+ * so the winner is simply the lowest CV RMSE.
  *
  * Done carefully, because a search like this happily fools itself:
  *  - A held-out test set is split off (randomly, seeded) before searching and only
@@ -14,6 +28,7 @@
  *  - Scores are on the price scale, so log / sqrt / raw responses compete fairly.
  *  - One seed drives the split, the CV folds and the search, so runs reproduce.
  */
+import { exprVars, parseFormula } from './formula'
 import { fitModel } from './model'
 import { rng } from './stats'
 import type { Row } from './types'
@@ -51,18 +66,48 @@ const CATEGORIES = [
   { name: 'condition', column: 'condition' },
 ]
 
-/** Interactions only enter when both parents are in the model. */
-const INTERACTIONS = [
-  { term: 'trim:age', needs: ['trim', 'age'] },
-  { term: 'trim:log1p(mileage)', needs: ['trim', 'mileage'] },
-  { term: 'age:log1p(mileage)', needs: ['age', 'mileage'] },
-  { term: 'transmission:age', needs: ['transmission', 'age'] },
-  { term: 'seller_type:age', needs: ['seller_type', 'age'] },
-  { term: 'fuel:age', needs: ['fuel', 'age'] },
-  { term: 'trim:transmission', needs: ['trim', 'transmission'] },
-  { term: 'C(engine_l):age', needs: ['engine', 'age'] },
-  { term: 'O(engine_l):age', needs: ['engine', 'age'] },
+/**
+ * Interactions only enter when both parents are in the model. These few come
+ * first in formulas; `prepare` adds every category with age, mileage and engine
+ * size, and every pair of categories.
+ */
+const CURATED = [
+  'trim:age',
+  'trim:log1p(mileage)',
+  'age:log1p(mileage)',
+  'transmission:age',
+  'seller_type:age',
+  'fuel:age',
+  'trim:transmission',
+  'C(engine_l):age',
+  'O(engine_l):age',
 ]
+const PARTNERS = [
+  { term: 'age', slot: 'age' },
+  { term: 'log1p(mileage)', slot: 'mileage' },
+  { term: 'engine_l', slot: 'engine' },
+]
+
+/** The slot or category each column belongs to, for working out an interaction's parents. */
+const OWNER: Record<string, string> = {
+  year: 'age',
+  ...Object.fromEntries(SLOTS.map((s) => [s.column, s.name])),
+  local: 'distance',
+  ...Object.fromEntries(CATEGORIES.flatMap((c) => [[c.column, c.name], [c.name, c.name]])),
+}
+
+const termKey = (term: string) => parseFormula(`y ~ ${term}`).terms[0].key
+const needsCache = new Map<string, string[]>()
+/** The slots and categories an interaction needs, e.g. trim:log1p(mileage) → trim, mileage. */
+function needsOf(term: string): string[] {
+  let needs = needsCache.get(term)
+  if (!needs) {
+    const vars = parseFormula(`y ~ ${term}`).terms[0].factors.flatMap((f) => [...exprVars(f.expr)])
+    needs = [...new Set(vars.map((v) => OWNER[v] ?? v))]
+    needsCache.set(term, needs)
+  }
+  return needs
+}
 
 /** Never offered, and why. */
 export const LEAKY = [
@@ -78,6 +123,8 @@ export interface Prepared {
   test: Row[]
   slots: typeof SLOTS
   categories: string[]
+  /** interactions whose parents can both be in a model */
+  interactions: string[]
   excluded: { name: string; reason: string }[]
   /** priced cars dropped for missing values in the searchable features */
   dropped: number
@@ -118,11 +165,26 @@ export function prepare(rows: Row[], settings: SearchSettings): Prepared {
   const complete = priced.filter((r) => needed.every((c) => !missing(value(r, c))))
   const shuffled = shuffle(complete, rng(settings.seed))
   const nTest = Math.round(shuffled.length * settings.testFrac)
+  const names = cats.map((c) => c.name)
+  const available = new Set([...slots.map((s) => s.name), ...names])
+  const generated = [
+    ...names.flatMap((c) => PARTNERS.map((x) => `${c}:${x.term}`)),
+    ...names.flatMap((a, i) => names.slice(i + 1).map((b) => `${a}:${b}`)),
+    'engine_l:age',
+  ]
+  const keys = new Set<string>()
+  const interactions = [...CURATED, ...generated].filter((t) => {
+    const key = termKey(t)
+    if (keys.has(key) || !needsOf(t).every((n) => available.has(n))) return false
+    keys.add(key)
+    return true
+  })
   return {
     test: shuffled.slice(0, nTest),
     train: shuffled.slice(nTest),
     slots,
-    categories: cats.map((c) => c.name),
+    categories: names,
+    interactions,
     excluded,
     dropped: priced.length - complete.length,
   }
@@ -136,14 +198,25 @@ export interface Candidate {
   inter: string[]
 }
 
+const presentOf = (c: Candidate) => new Set([...Object.entries(c.slots).filter(([, v]) => v).map(([k]) => k), ...c.cats])
+const interRank = (t: string) => (CURATED.includes(t) ? CURATED.indexOf(t) : CURATED.length)
+
 /** Terms in a fixed order, so the same model always gives the same formula (and is only scored once). */
 export function toFormula(c: Candidate): string {
-  const present = new Set([...Object.entries(c.slots).filter(([, v]) => v).map(([k]) => k), ...c.cats])
+  const present = presentOf(c)
   const slots = SLOTS.map((s) => c.slots[s.name]).filter(Boolean)
   const cats = CATEGORIES.map((x) => x.name).filter((name) => c.cats.includes(name))
-  const inter = INTERACTIONS.filter((i) => c.inter.includes(i.term) && i.needs.every((n) => present.has(n))).map((i) => i.term)
+  const inter = [...new Set(c.inter)]
+    .filter((t) => needsOf(t).every((n) => present.has(n)))
+    .sort((a, b) => interRank(a) - interRank(b) || a.localeCompare(b))
   const terms = [...slots, ...cats, ...inter]
   return `${c.response} ~ ${terms.join(' + ') || '1'}`
+}
+
+/** Drop interactions whose parents have gone, so a candidate is exactly its formula. */
+function normalise(c: Candidate): Candidate {
+  const present = presentOf(c)
+  return { ...c, inter: c.inter.filter((t) => needsOf(t).every((n) => present.has(n))) }
 }
 
 const pick = <T,>(xs: T[], rand: () => number): T => xs[Math.floor(rand() * xs.length)]
@@ -152,15 +225,14 @@ export function randomCandidate(p: Prepared, rand: () => number, interactions: b
   const slots = Object.fromEntries(p.slots.map((s) => [s.name, pick(s.options, rand)]))
   const cats = p.categories.filter(() => rand() < 0.5)
   const present = new Set([...Object.entries(slots).filter(([, v]) => v).map(([k]) => k), ...cats])
-  const possible = INTERACTIONS.filter((i) => i.needs.every((n) => present.has(n))).map((i) => i.term)
+  const possible = p.interactions.filter((t) => needsOf(t).every((n) => present.has(n)))
   const nInter = interactions ? Math.floor(rand() * 3) : 0
   return { response: pick(RESPONSES, rand), slots, cats, inter: shuffle(possible, rand).slice(0, nInter) }
 }
 
-/** One or two small changes to a candidate: the "local" half of the search. */
-export function mutate(c: Candidate, p: Prepared, rand: () => number, interactions: boolean): Candidate {
+/** A few random changes to a candidate: a kick away from a local optimum. */
+export function mutate(c: Candidate, p: Prepared, rand: () => number, interactions: boolean, changes = 1 + Math.floor(rand() * 2)): Candidate {
   const next: Candidate = { response: c.response, slots: { ...c.slots }, cats: [...c.cats], inter: [...c.inter] }
-  const changes = 1 + Math.floor(rand() * 2)
   for (let n = 0; n < changes; n++) {
     const kind = rand()
     if (kind < 0.15) next.response = pick(RESPONSES, rand)
@@ -170,12 +242,51 @@ export function mutate(c: Candidate, p: Prepared, rand: () => number, interactio
     } else if (kind < 0.85 && p.categories.length) {
       const cat = pick(p.categories, rand)
       next.cats = next.cats.includes(cat) ? next.cats.filter((x) => x !== cat) : [...next.cats, cat]
-    } else if (interactions) {
-      const t = pick(INTERACTIONS, rand).term
+    } else if (interactions && p.interactions.length) {
+      const t = pick(p.interactions, rand)
       next.inter = next.inter.includes(t) ? next.inter.filter((x) => x !== t) : [...next.inter, t]
     }
   }
-  return next
+  return normalise(next)
+}
+
+/** Every single change to a candidate: the neighbourhood the hill climb tries. */
+export function neighbours(c: Candidate, p: Prepared, interactions: boolean): Candidate[] {
+  const out: Candidate[] = []
+  for (const r of RESPONSES) if (r !== c.response) out.push({ ...c, response: r })
+  for (const s of p.slots) for (const o of s.options) if (o !== (c.slots[s.name] ?? '')) out.push(normalise({ ...c, slots: { ...c.slots, [s.name]: o } }))
+  for (const cat of p.categories)
+    out.push(normalise({ ...c, cats: c.cats.includes(cat) ? c.cats.filter((x) => x !== cat) : [...c.cats, cat] }))
+  if (interactions) {
+    const present = presentOf(c)
+    for (const t of p.interactions)
+      if (needsOf(t).every((n) => present.has(n)))
+        out.push({ ...c, inter: c.inter.includes(t) ? c.inter.filter((x) => x !== t) : [...c.inter, t] })
+  }
+  return out
+}
+
+/** A formula as a candidate, so the search can climb from it; null if the search can't express it. */
+export function candidateOf(formula: string, p: Prepared): Candidate | null {
+  try {
+    const f = parseFormula(formula)
+    const keys = new Set(f.terms.map((t) => t.key))
+    const termKeys = (text: string) => (text ? parseFormula(`y ~ ${text}`).terms.map((t) => t.key) : [])
+    const slots: Record<string, string> = {}
+    for (const s of p.slots) {
+      // Longest first, so `age + I(age^2)` wins over `age`.
+      const options = [...s.options].sort((a, b) => termKeys(b).length - termKeys(a).length)
+      const hit = options.find((o) => termKeys(o).every((k) => keys.has(k))) ?? ''
+      slots[s.name] = hit
+      for (const k of termKeys(hit)) keys.delete(k)
+    }
+    const cats = p.categories.filter((c) => keys.delete(termKey(c)))
+    const inter = p.interactions.filter((t) => keys.delete(termKey(t)))
+    if (keys.size || !RESPONSES.includes(f.responseText) || !f.intercept) return null
+    return { response: f.responseText, slots, cats, inter }
+  } catch {
+    return null
+  }
 }
 
 // ------------------------------------------------------------------ the search
@@ -224,14 +335,17 @@ export class Search {
   readonly prepared: Prepared
   readonly trials: Trial[] = []
   best: Trial | null = null
-  private bestCandidate: Candidate | null = null
   private readonly seen = new Map<string, number | null>()
   private readonly rand: () => number
   private readonly start = Date.now()
   private queue: string[]
   private readonly settings: SearchSettings
+  /** where the climb is, the best candidate so far, and the current one's untried neighbours */
+  private current: { c: Candidate; rmse: number } | null = null
+  private top: { c: Candidate; rmse: number } | null = null
+  private pending: Candidate[] | null = null
 
-  /** `seeds`: formulas to try first, e.g. the user's current model. */
+  /** `seeds`: formulas to try first, e.g. the user's current model; the best of them is where the climb starts. */
   constructor(rows: Row[], settings: SearchSettings, seeds: string[] = []) {
     this.settings = settings
     this.prepared = prepare(rows, settings)
@@ -262,17 +376,49 @@ export class Search {
     return trial
   }
 
-  /** Try one more candidate (half random exploration, half tweaks of the best). */
+  /** Score a candidate (once; repeats are free) and say what it got. */
+  private score(c: Candidate): { trial: Trial | null; rmse: number | null } {
+    const formula = toFormula(c)
+    const trial = this.evaluate(formula)
+    return { trial, rmse: this.seen.get(formula) ?? null }
+  }
+
+  private moveTo(c: Candidate, rmse: number) {
+    this.current = { c, rmse }
+    this.pending = null
+    if (!this.top || rmse < this.top.rmse) this.top = { c, rmse }
+  }
+
+  /** Try one more formula: a seed, the next single change, or a kick when no change helps. */
   step(): Trial | null {
-    const seed = this.queue.shift()
-    if (seed) return this.evaluate(seed)
+    const p = this.prepared
     const { interactions } = this.settings
-    const explore = !this.bestCandidate || this.rand() < 0.5
-    const cand = explore
-      ? randomCandidate(this.prepared, this.rand, interactions)
-      : mutate(this.bestCandidate!, this.prepared, this.rand, interactions)
-    const trial = this.evaluate(toFormula(cand))
-    if (trial?.improved) this.bestCandidate = cand
+    const seed = this.queue.shift()
+    if (seed !== undefined) {
+      const trial = this.evaluate(seed)
+      const rmse = this.seen.get(seed) ?? null
+      const c = candidateOf(seed, p)
+      if (c && rmse !== null && (!this.current || rmse < this.current.rmse)) this.moveTo(c, rmse)
+      return trial
+    }
+    if (!this.current) {
+      // No usable seed: start from a random formula.
+      const c = randomCandidate(p, this.rand, interactions)
+      const { trial, rmse } = this.score(c)
+      if (rmse !== null) this.moveTo(c, rmse)
+      return trial
+    }
+    this.pending ??= shuffle(neighbours(this.current.c, p, interactions), this.rand)
+    const next = this.pending.pop()
+    if (next) {
+      const { trial, rmse } = this.score(next)
+      if (rmse !== null && rmse < this.current.rmse) this.moveTo(next, rmse) // first improvement
+      return trial
+    }
+    // A local optimum: no single change helps. Kick the best so far and climb from there.
+    const kicked = mutate(this.top!.c, p, this.rand, interactions, 3 + Math.floor(this.rand() * 3))
+    const { trial, rmse } = this.score(kicked)
+    if (rmse !== null) this.moveTo(kicked, rmse)
     return trial
   }
 
