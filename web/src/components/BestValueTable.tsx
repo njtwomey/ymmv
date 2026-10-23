@@ -1,13 +1,15 @@
 /** Best value: cars ranked by how far their asking price sits below the model, with filters, sorting and paging. */
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ExternalLink, PanelRight, RotateCcw, Search } from 'lucide-react'
-import { type ReactNode, useMemo, useState } from 'react'
+import { ChevronLeft, ChevronRight, ExternalLink, PanelRight, RotateCcw } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { ChartCard } from '@/components/ChartCard'
 import { WriteoffBadge } from '@/components/ListingBadges'
 import { MarkMenu } from '@/components/MarkControl'
+import { ColumnChooser, FilterHead, FilterInput, RangeInput, type Sort, SortHead } from '@/components/TableFilters'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { gbp, miles, pct } from '@/lib/format'
+import { num, useHiddenColumns } from '@/lib/tableColumns'
 import type { MarkValue, Row } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -38,82 +40,28 @@ interface Criteria {
 }
 const NONE: Criteria = { q: '', minYear: '', maxYear: '', maxMileage: '', minPrice: '', maxPrice: '', minModel: '', maxModel: '', maxDistance: '', maxGap: '', sold: false }
 
-const num = (s: string) => (s.trim() === '' || !Number.isFinite(Number(s)) ? null : Number(s))
-
-const NO_SPINNER = '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
-
-const FIELD =
-  'h-7 w-full min-w-0 bg-transparent px-1.5 text-xs font-normal text-foreground tabular-nums outline-none placeholder:text-muted-foreground'
-const BOX =
-  'flex h-7 items-center rounded-md border border-input bg-transparent focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30'
-
-/** A joined lower–upper pair in one box, so it reads as a single range. */
-function RangeInput({ label, from, to, onFrom, onTo }: { label: string; from: string; to: string; onFrom: (v: string) => void; onTo: (v: string) => void }) {
-  return (
-    <div className={cn(BOX, 'ml-auto w-28')}>
-      <input className={cn(FIELD, NO_SPINNER)} type="number" inputMode="numeric" placeholder="from" aria-label={`${label} from`} value={from} onChange={(e) => onFrom(e.target.value)} />
-      <span className="text-muted-foreground" aria-hidden>
-        –
-      </span>
-      <input className={cn(FIELD, NO_SPINNER)} type="number" inputMode="numeric" placeholder="to" aria-label={`${label} to`} value={to} onChange={(e) => onTo(e.target.value)} />
-    </div>
-  )
+type Col = 'mark' | 'year' | 'mileage' | 'price' | 'model' | 'gap' | 'where'
+const COLUMNS: { key: Col; label: string }[] = [
+  { key: 'mark', label: 'Mark' },
+  { key: 'year', label: 'Year' },
+  { key: 'mileage', label: 'Mileage' },
+  { key: 'price', label: 'Price' },
+  { key: 'model', label: 'Model' },
+  { key: 'gap', label: 'Gap' },
+  { key: 'where', label: 'Where' },
+]
+/** the filter fields each column owns (cleared when it's hidden) */
+const COL_FILTERS: Partial<Record<Col, (keyof Criteria)[]>> = {
+  year: ['minYear', 'maxYear'],
+  mileage: ['maxMileage'],
+  price: ['minPrice', 'maxPrice'],
+  model: ['minModel', 'maxModel'],
+  gap: ['maxGap'],
+  where: ['maxDistance'],
 }
-
-function FilterInput({
-  label,
-  value,
-  onChange,
-  placeholder,
-  numeric = true,
-  left = false,
-}: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  placeholder: string
-  numeric?: boolean
-  /** sit at the left of the column (for left-aligned columns); numbers sit right by default */
-  left?: boolean
-}) {
-  return (
-    <div className={cn(BOX, numeric ? 'w-16' : 'w-36', numeric && !left && 'ml-auto')}>
-      {!numeric && <Search className="ml-2 size-3.5 shrink-0 text-muted-foreground" />}
-      <input
-        className={cn(FIELD, numeric && NO_SPINNER)}
-        type={numeric ? 'number' : 'text'}
-        inputMode={numeric ? 'numeric' : undefined}
-        placeholder={placeholder}
-        aria-label={label}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </div>
-  )
-}
-
-function SortHead({
-  k,
-  sort,
-  onSort,
-  right,
-  children,
-}: {
-  k: SortKey
-  sort: { key: SortKey; dir: 1 | -1 }
-  onSort: (k: SortKey) => void
-  right?: boolean
-  children: ReactNode
-}) {
-  return (
-    <TableHead className={cn(right && 'text-right')}>
-      <button className={cn('inline-flex items-center gap-1 hover:text-foreground', sort.key === k && 'text-foreground')} onClick={() => onSort(k)}>
-        {children}
-        {sort.key === k && (sort.dir === 1 ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />)}
-      </button>
-    </TableHead>
-  )
-}
+/** the sort each column owns */
+const COL_SORT: Partial<Record<Col, SortKey>> = { year: 'year', mileage: 'mileage', price: 'price', model: 'model', gap: 'gap', where: 'distance' }
+const DEFAULT_SORT: Sort<SortKey> = { key: 'gap', dir: 1 }
 
 export function BestValueTable({
   gaps,
@@ -130,8 +78,20 @@ export function BestValueTable({
   onExplain: (row: Row) => void
 }) {
   const [c, setC] = useState<Criteria>(NONE)
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'gap', dir: 1 })
+  const [sort, setSort] = useState<Sort<SortKey>>(DEFAULT_SORT)
   const [page, setPage] = useState(0)
+  const cols = useHiddenColumns<Col>('bestValue')
+  const show = cols.shown
+  const toggleColumn = (k: Col) => {
+    if (show(k)) {
+      // Hiding a column drops its filter (and its sort).
+      const drop = COL_FILTERS[k] ?? []
+      if (drop.length) setC((x) => ({ ...x, ...Object.fromEntries(drop.map((f) => [f, ''])) }))
+      if (COL_SORT[k] === sort.key) setSort(DEFAULT_SORT)
+      setPage(0)
+    }
+    cols.toggle(k)
+  }
   const set = <K extends keyof Criteria>(k: K, v: Criteria[K]) => {
     setC((x) => ({ ...x, [k]: v }))
     setPage(0)
@@ -192,6 +152,7 @@ export function BestValueTable({
   const current = Math.min(page, pages - 1) // the list can shrink when the sidebar filters or model change
   const shown = sorted.slice(current * PAGE, current * PAGE + PAGE)
   const active = Object.entries(c).some(([k, v]) => (k === 'sold' ? v : v !== ''))
+  const nCols = 3 + COLUMNS.filter((col) => show(col.key)).length // car, actions, + chosen
 
   return (
     <ChartCard
@@ -209,6 +170,7 @@ export function BestValueTable({
             <RotateCcw /> Reset filters
           </Button>
         )}
+        <ColumnChooser columns={COLUMNS} shown={show} onToggle={toggleColumn} />
       </div>
 
       <>
@@ -216,65 +178,71 @@ export function BestValueTable({
             <Table className="text-sm">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-8" />
-                  <SortHead sort={sort} onSort={onSort} k="variant">Car</SortHead>
-                  <SortHead sort={sort} onSort={onSort} k="year" right>
-                    Year
+                  {show('mark') && <TableHead className="w-8" />}
+                  <SortHead sort={sort} onSort={onSort} k="variant" left>
+                    Car
                   </SortHead>
-                  <SortHead sort={sort} onSort={onSort} k="mileage" right>
-                    Mileage
-                  </SortHead>
-                  <SortHead sort={sort} onSort={onSort} k="price" right>
-                    Price
-                  </SortHead>
-                  <SortHead sort={sort} onSort={onSort} k="model" right>
-                    Model
-                  </SortHead>
-                  <SortHead sort={sort} onSort={onSort} k="gap" right>
-                    Gap
-                  </SortHead>
-                  <SortHead sort={sort} onSort={onSort} k="distance">Where</SortHead>
+                  {show('year') && <SortHead sort={sort} onSort={onSort} k="year">Year</SortHead>}
+                  {show('mileage') && <SortHead sort={sort} onSort={onSort} k="mileage">Mileage</SortHead>}
+                  {show('price') && <SortHead sort={sort} onSort={onSort} k="price">Price</SortHead>}
+                  {show('model') && <SortHead sort={sort} onSort={onSort} k="model">Model</SortHead>}
+                  {show('gap') && <SortHead sort={sort} onSort={onSort} k="gap">Gap</SortHead>}
+                  {show('where') && <SortHead sort={sort} onSort={onSort} k="distance">Where</SortHead>}
                   <TableHead className="w-16" />
                 </TableRow>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead />
-                  <TableHead className="py-1.5">
+                  {show('mark') && <TableHead />}
+                  <FilterHead left>
                     <FilterInput label="Search" numeric={false} value={c.q} onChange={(v) => set('q', v)} placeholder="cooper s auto bristol…" />
-                  </TableHead>
-                  <TableHead className="py-1.5">
-                    <RangeInput label="Year" from={c.minYear} to={c.maxYear} onFrom={(v) => set('minYear', v)} onTo={(v) => set('maxYear', v)} />
-                  </TableHead>
-                  <TableHead className="py-1.5">
-                    <FilterInput label="Max mileage" value={c.maxMileage} onChange={(v) => set('maxMileage', v)} placeholder="max" />
-                  </TableHead>
-                  <TableHead className="py-1.5">
-                    <RangeInput label="Price (£)" from={c.minPrice} to={c.maxPrice} onFrom={(v) => set('minPrice', v)} onTo={(v) => set('maxPrice', v)} />
-                  </TableHead>
-                  <TableHead className="py-1.5">
-                    <RangeInput label="Model price (£)" from={c.minModel} to={c.maxModel} onFrom={(v) => set('minModel', v)} onTo={(v) => set('maxModel', v)} />
-                  </TableHead>
-                  <TableHead className="py-1.5">
-                    <FilterInput label="Gap at most (%)" value={c.maxGap} onChange={(v) => set('maxGap', v)} placeholder="≤ %" />
-                  </TableHead>
-                  <TableHead className="py-1.5">
-                    <FilterInput label="Max distance (miles)" left value={c.maxDistance} onChange={(v) => set('maxDistance', v)} placeholder="≤ mi" />
-                  </TableHead>
+                  </FilterHead>
+                  {show('year') && (
+                    <FilterHead>
+                      <RangeInput narrow label="Year" from={c.minYear} to={c.maxYear} onFrom={(v) => set('minYear', v)} onTo={(v) => set('maxYear', v)} />
+                    </FilterHead>
+                  )}
+                  {show('mileage') && (
+                    <FilterHead>
+                      <FilterInput label="Max mileage" value={c.maxMileage} onChange={(v) => set('maxMileage', v)} placeholder="max" />
+                    </FilterHead>
+                  )}
+                  {show('price') && (
+                    <FilterHead>
+                      <RangeInput label="Price (£)" from={c.minPrice} to={c.maxPrice} onFrom={(v) => set('minPrice', v)} onTo={(v) => set('maxPrice', v)} />
+                    </FilterHead>
+                  )}
+                  {show('model') && (
+                    <FilterHead>
+                      <RangeInput label="Model price (£)" from={c.minModel} to={c.maxModel} onFrom={(v) => set('minModel', v)} onTo={(v) => set('maxModel', v)} />
+                    </FilterHead>
+                  )}
+                  {show('gap') && (
+                    <FilterHead>
+                      <FilterInput label="Gap at most (%)" value={c.maxGap} onChange={(v) => set('maxGap', v)} placeholder="≤ %" />
+                    </FilterHead>
+                  )}
+                  {show('where') && (
+                    <FilterHead>
+                      <FilterInput label="Max distance (miles)" value={c.maxDistance} onChange={(v) => set('maxDistance', v)} placeholder="≤ mi" />
+                    </FilterHead>
+                  )}
                   <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {shown.length === 0 && (
                   <TableRow className="hover:bg-transparent">
-                    <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
+                    <TableCell colSpan={nCols} className="py-10 text-center text-muted-foreground">
                       {gaps.length ? 'No cars match these filters.' : 'No predictions for these cars.'}
                     </TableCell>
                   </TableRow>
                 )}
                 {shown.map(({ r, pred, gap }) => (
                   <TableRow key={r.id} className="cursor-pointer" onClick={() => onExplain(r)} title="Why this price?">
-                    <TableCell>
-                      <MarkMenu mark={r.mark} onChange={(m) => onMark(r.id, m)} />
-                    </TableCell>
+                    {show('mark') && (
+                      <TableCell className="text-center">
+                        <MarkMenu mark={r.mark} onChange={(m) => onMark(r.id, m)} />
+                      </TableCell>
+                    )}
                     <TableCell className="max-w-[15rem]">
                       <div className="flex items-center gap-1.5">
                         <span className="truncate">{r.variant}</span>
@@ -282,24 +250,28 @@ export function BestValueTable({
                         {r.status !== 'active' && <span className="text-xs text-muted-foreground">sold</span>}
                       </div>
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{r.year ?? '–'}</TableCell>
-                    <TableCell className="text-right tabular-nums">{miles(r.mileage)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{gbp(r.price_gbp)}</TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">{gbp(pred)}</TableCell>
-                    <TableCell
-                      className={cn(
-                        'text-right font-medium tabular-nums',
-                        gap < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400',
-                      )}
-                    >
-                      {pct(gap)}
-                    </TableCell>
-                    <TableCell className="max-w-[10rem] truncate text-muted-foreground">
-                      {r.location}
-                      {r.distance_miles !== null && ` · ${r.distance_miles} mi`}
-                    </TableCell>
+                    {show('year') && <TableCell className="text-center tabular-nums">{r.year ?? '–'}</TableCell>}
+                    {show('mileage') && <TableCell className="text-center tabular-nums">{miles(r.mileage)}</TableCell>}
+                    {show('price') && <TableCell className="text-center tabular-nums">{gbp(r.price_gbp)}</TableCell>}
+                    {show('model') && <TableCell className="text-center tabular-nums text-muted-foreground">{gbp(pred)}</TableCell>}
+                    {show('gap') && (
+                      <TableCell
+                        className={cn(
+                          'text-center font-medium tabular-nums',
+                          gap < 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400',
+                        )}
+                      >
+                        {pct(gap)}
+                      </TableCell>
+                    )}
+                    {show('where') && (
+                      <TableCell className="max-w-[10rem] truncate text-center text-muted-foreground">
+                        {r.location}
+                        {r.distance_miles !== null && ` · ${r.distance_miles} mi`}
+                      </TableCell>
+                    )}
                     <TableCell>
-                      <div className="flex items-center justify-end">
+                      <div className="flex items-center justify-center">
                         <Button
                           variant="ghost"
                           size="icon-sm"
