@@ -9,14 +9,20 @@ from loguru import logger
 
 @cache
 def latlon(postcode: str) -> tuple[float, float] | None:
-    try:
-        r = httpx.get(f"https://api.postcodes.io/postcodes/{postcode.replace(' ', '')}", timeout=10)
-        r.raise_for_status()
-        res = r.json()["result"]
-        return res["latitude"], res["longitude"]
-    except (httpx.HTTPError, KeyError, TypeError) as e:
-        logger.warning("could not geocode {}: {}", postcode, e)
-        return None
+    # Retired postcodes (some dealers still use them) only resolve under terminated_postcodes.
+    for kind in ("postcodes", "terminated_postcodes"):
+        try:
+            r = httpx.get(f"https://api.postcodes.io/{kind}/{postcode.replace(' ', '')}", timeout=10)
+            if r.status_code == 404:
+                continue
+            r.raise_for_status()
+            res = r.json()["result"]
+            return res["latitude"], res["longitude"]
+        except (httpx.HTTPError, KeyError, TypeError) as e:
+            logger.warning("could not geocode {}: {}", postcode, e)
+            return None
+    logger.warning("could not geocode {}: not found", postcode)
+    return None
 
 
 def miles_between(a: str, b: str) -> int | None:

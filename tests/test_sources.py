@@ -1,5 +1,6 @@
 from bs4 import BeautifulSoup
 
+from ymmv.sources import dicklovett
 from ymmv.sources.autotrader import parse_card as parse_autotrader
 from ymmv.sources.onlymini import card_raw, matches
 from ymmv.sources.onlymini import parse_card as parse_onlymini
@@ -36,3 +37,25 @@ def test_onlymini_rejects_other_models(onlymini_html, cars):
     raw = card_raw(BeautifulSoup(onlymini_html, "html.parser").select("li.cwSLVehicle")[0])
     assert not matches(raw, cars["mini-hatch-5dr"])  # it's a 3-door
     assert not matches(raw | {"model": "Clubman"}, cars["mini-hatch-3dr"])
+
+
+def test_dicklovett_cards(dicklovett_html, mini):
+    soup = BeautifulSoup(dicklovett_html, "html.parser")
+    assert dicklovett.total_cars(soup) == 52
+    new_cooper, hatch = [
+        dicklovett.card_raw(a) for a in soup.select("li.used-stock-list-list__item a.used-stock-element")
+    ]
+    assert not dicklovett.matches(new_cooper, mini)  # the 2024-on "MINI Cooper" is another model
+    assert dicklovett.matches(hatch, mini)
+    rec = dicklovett.parse_card(hatch, mini, distance=20)
+    assert rec.variant == "1.5 One Euro 6"  # the engine is put back in front of the sub-title
+    assert (rec.make, rec.model, rec.trim, rec.engine_l, rec.doors) == ("MINI", "Hatch", "One", 1.5, 3)
+    assert (rec.fuel, rec.transmission, rec.year, rec.mileage, rec.price_gbp) == (
+        "Petrol",
+        "Manual",
+        2018,
+        45394,
+        10450,
+    )
+    assert (rec.location, rec.distance_miles, rec.seller_type, rec.reserved) == ("Melksham", 20, "TRADE", False)
+    assert rec.url == f"https://www.dicklovett.co.uk/mini/used-cars/{rec.source_id}"

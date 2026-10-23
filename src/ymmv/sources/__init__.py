@@ -2,8 +2,9 @@
 
 from .autotrader import AutoTrader
 from .base import Source
+from .dicklovett import DickLovett
 from .onlymini import OnlyMini
 
-SOURCES: dict[str, type[Source]] = {s.name: s for s in (AutoTrader, OnlyMini)}
+SOURCES: dict[str, type[Source]] = {s.name: s for s in (AutoTrader, OnlyMini, DickLovett)}
 
 __all__ = ["SOURCES", "Source"]

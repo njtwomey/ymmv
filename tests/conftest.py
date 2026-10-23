@@ -30,6 +30,11 @@ def onlymini_html():
 
 
 @pytest.fixture
+def dicklovett_html():
+    return (FIXTURES / "dicklovett_stock.html").read_text()
+
+
+@pytest.fixture
 def sessions(tmp_path):
     """A fresh database built by running every migration."""
     return db.connect(tmp_path / "test.sqlite")

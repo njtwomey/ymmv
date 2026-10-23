@@ -21,6 +21,7 @@ export const markInfo = (mark: MarkValue | null) => MARKS.find((m) => m.value ==
 export const SOURCE_LABELS: Record<string, string> = {
   autotrader: 'AutoTrader UK',
   onlymini: 'Only Mini',
+  dicklovett: 'Dick Lovett',
 }
 
 export const sourceLabel = (s: string) => SOURCE_LABELS[s] ?? s

@@ -35,6 +35,7 @@ Every command and option is documented in `--help` (pydantic-settings CLI).
 |---|---|---|
 | `autotrader` | AutoTrader UK, whole country, distance from `--postcode` | any make/model |
 | `onlymini` | Only Mini, Bristol MINI specialist (BS3 5RU), incl. reserved cars | MINIs only |
+| `dicklovett` | Dick Lovett, MINI main dealer (Bristol, Swindon, Melksham, Hungerford); no colours | MINIs only |
 
 To add a car, add a table to `cars.yaml`. To add a site, subclass `Source`
 (`sources/base.py`: implement `listings(car)`, optionally `unsupported(car)`) and
@@ -64,7 +65,7 @@ src/ymmv/
   cli.py                  `ymmv` and `scrape` commands
   cars.py                 Car model + cars.yaml loader
   schema.py               the standard ListingRecord + normalisers
-  sources/                base.py, autotrader.py, onlymini.py, registry
+  sources/                base.py, autotrader.py, onlymini.py, dicklovett.py, registry
   db.py                   SQLAlchemy models, record/delist logic, auto-migrate
   migrations/             Alembic (0001 baseline, 0002 cars/marks/standard schema)
   geo.py                  postcode distances (postcodes.io)
